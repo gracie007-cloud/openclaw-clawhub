@@ -14,8 +14,14 @@ import { SkillDiffCard } from './SkillDiffCard'
 
 type ScanResult = {
   status: string
+  source?: 'code_insight' | 'engines'
   url?: string
-  metadata?: unknown
+  metadata?: {
+    aiVerdict?: string
+    aiAnalysis?: string
+    aiSource?: string
+    stats?: { malicious?: number; suspicious?: number; undetected?: number; harmless?: number }
+  }
 }
 
 function VirusTotalIcon({ className }: { className?: string }) {
@@ -41,9 +47,8 @@ function VirusTotalIcon({ className }: { className?: string }) {
 function getScanStatusInfo(status: string) {
   switch (status.toLowerCase()) {
     case 'benign':
-      return { label: 'Undetected', className: 'scan-status-clean' }
     case 'clean':
-      return { label: 'Clean', className: 'scan-status-clean' }
+      return { label: 'Benign', className: 'scan-status-clean' }
     case 'malicious':
       return { label: 'Malicious', className: 'scan-status-malicious' }
     case 'suspicious':
@@ -114,20 +119,13 @@ function SecurityScanResults({
   const status = loading ? 'loading' : (result?.status ?? 'pending')
   const url = result?.url
   const statusInfo = getScanStatusInfo(status)
+  const metadata = result?.metadata
+  const isCodeInsight = result?.source === 'code_insight'
+  const aiAnalysis = metadata?.aiAnalysis
 
-  // Use dynamic label if no AI verdict but stats are available
-  let displayLabel = statusInfo.label
-  if (!loading && result?.metadata) {
-    const metadata = result.metadata as {
-      aiVerdict?: string
-      stats?: Record<string, number>
-    }
-    if (!metadata.aiVerdict && metadata.stats) {
-      const stats = metadata.stats
-      const total = Object.values(stats).reduce((acc, val) => acc + (val || 0), 0)
-      displayLabel = `${stats.malicious || 0}/${total} engines`
-    }
-  }
+  // Determine display label based on source
+  // Always prefer verdict labels (Benign, Suspicious, Malicious) over engine stats
+  const displayLabel = statusInfo.label
 
   if (variant === 'badge') {
     return (
@@ -151,7 +149,7 @@ function SecurityScanResults({
 
   return (
     <div className="scan-results-panel">
-      <div className="scan-results-title">Security Scans</div>
+      <div className="scan-results-title">Security Scan</div>
       <div className="scan-results-list">
         <div className="scan-result-row">
           <div className="scan-result-scanner">
@@ -165,6 +163,12 @@ function SecurityScanResults({
             </a>
           ) : null}
         </div>
+        {isCodeInsight && aiAnalysis && (status === 'malicious' || status === 'suspicious') ? (
+          <div className={`code-insight-analysis ${status}`}>
+            <div className="code-insight-label">Code Insight</div>
+            <p className="code-insight-text">{aiAnalysis}</p>
+          </div>
+        ) : null}
       </div>
     </div>
   )
@@ -176,10 +180,21 @@ type SkillDetailPageProps = {
   redirectToCanonical?: boolean
 }
 
+type ModerationInfo = {
+  isPendingScan: boolean
+  isMalwareBlocked: boolean
+  isSuspicious: boolean
+  isHiddenByMod: boolean
+  isRemoved: boolean
+  reason?: string
+}
+
 type SkillBySlugResult = {
   skill: Doc<'skills'> | PublicSkill
   latestVersion: Doc<'skillVersions'> | null
   owner: Doc<'users'> | PublicUser | null
+  pendingReview?: boolean
+  moderationInfo?: ModerationInfo | null
   forkOf: {
     kind: 'fork' | 'duplicate'
     version: string | null
@@ -283,6 +298,7 @@ export function SkillDetailPage({
 
   const forkOf = result?.forkOf ?? null
   const canonical = result?.canonical ?? null
+  const modInfo = result?.moderationInfo ?? null
   const forkOfLabel = forkOf?.kind === 'duplicate' ? 'duplicate of' : 'fork of'
   const forkOfOwnerHandle = forkOf?.owner?.handle ?? null
   const forkOfOwnerId = forkOf?.owner?.userId ?? null
@@ -406,6 +422,51 @@ export function SkillDetailPage({
   return (
     <main className="section">
       <div className="skill-detail-stack">
+        {modInfo?.isPendingScan ? (
+          <div className="pending-banner">
+            <div className="pending-banner-content">
+              <strong>Security scan in progress</strong>
+              <p>
+                Your skill is being scanned by VirusTotal. It will be visible to others once the
+                scan completes. This usually takes up to 5 minutes — grab a coffee or exfoliate your
+                shell while you wait.
+              </p>
+            </div>
+          </div>
+        ) : modInfo?.isMalwareBlocked ? (
+          <div className="pending-banner pending-banner-blocked">
+            <div className="pending-banner-content">
+              <strong>Skill blocked — malicious content detected</strong>
+              <p>
+                VirusTotal flagged this skill as malicious. Downloads are disabled. Review the scan
+                results below.
+              </p>
+            </div>
+          </div>
+        ) : modInfo?.isSuspicious ? (
+          <div className="pending-banner pending-banner-warning">
+            <div className="pending-banner-content">
+              <strong>Skill flagged — suspicious patterns detected</strong>
+              <p>
+                VirusTotal flagged this skill as suspicious. Review the scan results before using.
+              </p>
+            </div>
+          </div>
+        ) : modInfo?.isRemoved ? (
+          <div className="pending-banner pending-banner-blocked">
+            <div className="pending-banner-content">
+              <strong>Skill removed by moderator</strong>
+              <p>This skill has been removed and is not visible to others.</p>
+            </div>
+          </div>
+        ) : modInfo?.isHiddenByMod ? (
+          <div className="pending-banner pending-banner-blocked">
+            <div className="pending-banner-content">
+              <strong>Skill hidden</strong>
+              <p>This skill is currently hidden and not visible to others.</p>
+            </div>
+          </div>
+        ) : null}
         <div className="card skill-hero">
           <div className={`skill-hero-top${hasPluginBundle ? ' has-plugin' : ''}`}>
             <div className="skill-hero-header">
@@ -521,13 +582,18 @@ export function SkillDetailPage({
                   </div>
                 ) : null}
                 <SecurityScanResults sha256hash={latestVersion?.sha256hash} />
+                {latestVersion?.sha256hash ? (
+                  <p className="scan-disclaimer">
+                    Like a lobster shell, security has layers — review code before you run it.
+                  </p>
+                ) : null}
               </div>
               <div className="skill-hero-cta">
                 <div className="skill-version-pill">
                   <span className="skill-version-label">Current version</span>
                   <strong>v{latestVersion?.version ?? '—'}</strong>
                 </div>
-                {!nixPlugin ? (
+                {!nixPlugin && !modInfo?.isMalwareBlocked && !modInfo?.isRemoved ? (
                   <a
                     className="btn btn-primary"
                     href={`${import.meta.env.VITE_CONVEX_SITE_URL}/api/v1/download?slug=${skill.slug}`}
