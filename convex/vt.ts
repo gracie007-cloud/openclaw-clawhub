@@ -9,7 +9,7 @@ import { buildDeterministicZip } from './lib/skillZip'
  */
 export const fixNullModerationReasons = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ total: number; fixed: number; noVtAnalysis: number }> => {
     const batchSize = args.batchSize ?? 100
     const skills = await ctx.runQuery(internal.skills.getUnscannedActiveSkillsInternal, {
       limit: batchSize,
@@ -123,7 +123,16 @@ export const fetchResults = action({
   args: {
     sha256hash: v.optional(v.string()),
   },
-  handler: async (_ctx, args) => {
+  handler: async (
+    _ctx,
+    args,
+  ): Promise<{
+    status: string
+    source?: 'code_insight' | 'engines'
+    url?: string
+    metadata?: any
+    message?: string
+  }> => {
     if (!args.sha256hash) {
       return { status: 'not_found' }
     }
@@ -193,7 +202,7 @@ export const scanWithVirusTotal = internalAction({
   args: {
     versionId: v.id('skillVersions'),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
       console.log('VT_API_KEY not configured, skipping scan')
@@ -360,7 +369,16 @@ export const pollPendingScans = internalAction({
   args: {
     batchSize: v.optional(v.number()),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{
+    processed: number
+    updated: number
+    healthy: boolean
+    queueSize?: number
+    staled?: number
+  }> => {
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
       console.log('[vt:pollPendingScans] VT_API_KEY not configured, skipping')
@@ -384,7 +402,12 @@ export const pollPendingScans = internalAction({
     })
 
     if (pendingSkills.length === 0) {
-      return { processed: 0, updated: 0, healthy: health.healthy, queueSize: health.queueSize }
+      return {
+        processed: 0,
+        updated: 0,
+        healthy: health.healthy,
+        queueSize: health.queueSize,
+      }
     }
 
     console.log(
@@ -396,15 +419,17 @@ export const pollPendingScans = internalAction({
     let updated = 0
     let staled = 0
     for (const { skillId, versionId, sha256hash, checkCount } of pendingSkills) {
-      if (!sha256hash) {
+      if (!sha256hash || !versionId) {
         console.log(
-          `[vt:pollPendingScans] Skill ${skillId} version ${versionId} has no hash, skipping`,
+          `[vt:pollPendingScans] Skill ${skillId} has no hash or version, skipping`,
         )
         continue
       }
 
       // Track this check attempt
-      await ctx.runMutation(internal.skills.updateScanCheckInternal, { skillId })
+      await ctx.runMutation(internal.skills.updateScanCheckInternal, {
+        skillId,
+      })
 
       try {
         const vtResult = await checkExistingFile(apiKey, sha256hash)
@@ -415,7 +440,9 @@ export const pollPendingScans = internalAction({
             console.warn(
               `[vt:pollPendingScans] Skill ${skillId} exceeded max checks, marking stale`,
             )
-            await ctx.runMutation(internal.skills.markScanStaleInternal, { skillId })
+            await ctx.runMutation(internal.skills.markScanStaleInternal, {
+              skillId,
+            })
             staled++
           }
           continue
@@ -436,7 +463,9 @@ export const pollPendingScans = internalAction({
             console.warn(
               `[vt:pollPendingScans] Skill ${skillId} exceeded max checks, marking stale`,
             )
-            await ctx.runMutation(internal.skills.markScanStaleInternal, { skillId })
+            await ctx.runMutation(internal.skills.markScanStaleInternal, {
+              skillId,
+            })
             staled++
           }
           continue
@@ -545,7 +574,21 @@ export const backfillPendingScans = internalAction({
   args: {
     triggerRescans: v.optional(v.boolean()),
   },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | {
+        total: number
+        updated: number
+        rescansRequested: number
+        noHash: number
+        notInVT: number
+        errors: number
+        remaining: number
+      }
+    | { error: string }
+  > => {
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
       console.log('[vt:backfill] VT_API_KEY not configured')
@@ -631,7 +674,18 @@ export const backfillPendingScans = internalAction({
  */
 export const rescanActiveSkills = internalAction({
   args: {},
-  handler: async (ctx) => {
+  handler: async (
+    ctx,
+  ): Promise<
+    | {
+        total: number
+        updated: number
+        unchanged: number
+        errors: number
+        durationMs: number
+      }
+    | { error: string }
+  > => {
     const startTime = Date.now()
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
@@ -643,7 +697,7 @@ export const rescanActiveSkills = internalAction({
 
     if (skills.length === 0) {
       console.log('[vt:rescan] No active skills to re-scan')
-      return { total: 0, updated: 0, unchanged: 0, errors: 0 }
+      return { total: 0, updated: 0, unchanged: 0, errors: 0, durationMs: 0 }
     }
 
     console.log(`[vt:rescan] Daily re-scan of ${skills.length} active skills`)
@@ -726,7 +780,13 @@ export const rescanActiveSkills = internalAction({
       durationMs,
     })
 
-    const result = { total: skills.length, updated, unchanged, errors, durationMs }
+    const result = {
+      total: skills.length,
+      updated,
+      unchanged,
+      errors,
+      durationMs,
+    }
     console.log('[vt:rescan] Complete:', result)
     return result
   },
@@ -738,7 +798,12 @@ export const rescanActiveSkills = internalAction({
  */
 export const scanUnscannedSkills = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    { total: number; scanned: number; errors: number; durationMs: number } | { error: string }
+  > => {
     const startTime = Date.now()
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
@@ -753,7 +818,7 @@ export const scanUnscannedSkills = internalAction({
 
     if (skills.length === 0) {
       console.log('[vt:scanUnscanned] No unscanned skills found')
-      return { total: 0, scanned: 0, errors: 0 }
+      return { total: 0, scanned: 0, errors: 0, durationMs: 0 }
     }
 
     console.log(`[vt:scanUnscanned] Scanning ${skills.length} unscanned skills`)
@@ -800,7 +865,13 @@ export const scanUnscannedSkills = internalAction({
  */
 export const scanLegacySkills = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | { total: number; scanned: number; alreadyHasHash: number; errors: number; durationMs: number }
+    | { error: string }
+  > => {
     const startTime = Date.now()
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
@@ -815,7 +886,7 @@ export const scanLegacySkills = internalAction({
 
     if (skills.length === 0) {
       console.log('[vt:scanLegacy] No legacy skills to scan')
-      return { total: 0, scanned: 0, errors: 0 }
+      return { total: 0, scanned: 0, alreadyHasHash: 0, errors: 0, durationMs: 0 }
     }
 
     console.log(`[vt:scanLegacy] Scanning ${skills.length} legacy skills`)
@@ -857,7 +928,13 @@ export const scanLegacySkills = internalAction({
       durationMs,
     })
 
-    const result = { total: skills.length, scanned, alreadyHasHash, errors, durationMs }
+    const result = {
+      total: skills.length,
+      scanned,
+      alreadyHasHash,
+      errors,
+      durationMs,
+    }
     console.log('[vt:scanLegacy] Complete:', result)
     return result
   },
@@ -870,7 +947,13 @@ export const scanLegacySkills = internalAction({
  */
 export const backfillActiveSkillsVTCache = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    | { total: number; updated: number; noResults: number; errors: number; done: boolean }
+    | { error: string }
+  > => {
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
       console.log('[vt:backfillActive] VT_API_KEY not configured')
@@ -955,7 +1038,12 @@ export const backfillActiveSkillsVTCache = internalAction({
  */
 export const requestReanalysisForPending = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<
+    { total: number; requested: number; errors: number; done: boolean } | { error: string }
+  > => {
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
       console.log('[vt:requestReanalysis] VT_API_KEY not configured')
@@ -971,7 +1059,7 @@ export const requestReanalysisForPending = internalAction({
 
     if (skills.length === 0) {
       console.log('[vt:requestReanalysis] No pending skills found')
-      return { total: 0, requested: 0, done: true }
+      return { total: 0, requested: 0, errors: 0, done: true }
     }
 
     console.log(`[vt:requestReanalysis] Found ${skills.length} skills to request reanalysis`)
@@ -994,7 +1082,12 @@ export const requestReanalysisForPending = internalAction({
       }
     }
 
-    const result = { total: skills.length, requested, errors, done: skills.length < batchSize }
+    const result = {
+      total: skills.length,
+      requested,
+      errors,
+      done: skills.length < batchSize,
+    }
     console.log('[vt:requestReanalysis] Complete:', result)
     return result
   },
@@ -1005,7 +1098,7 @@ export const requestReanalysisForPending = internalAction({
  */
 export const fixNullModerationStatus = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ total: number; fixed: number; done: boolean }> => {
     const batchSize = args.batchSize ?? 100
 
     const skills = await ctx.runQuery(internal.skills.getSkillsWithNullModerationStatusInternal, {
@@ -1024,7 +1117,11 @@ export const fixNullModerationStatus = internalAction({
     }
 
     console.log(`[vt:fixNullStatus] Fixed ${skills.length} skills`)
-    return { total: skills.length, fixed: skills.length, done: skills.length < batchSize }
+    return {
+      total: skills.length,
+      fixed: skills.length,
+      done: skills.length < batchSize,
+    }
   },
 })
 
@@ -1034,7 +1131,10 @@ export const fixNullModerationStatus = internalAction({
  */
 export const syncModerationReasons = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ total: number; synced: number; noVtAnalysis: number; done: boolean }> => {
     const batchSize = args.batchSize ?? 100
 
     const skills = await ctx.runQuery(internal.skills.getSkillsWithStaleModerationReasonInternal, {
@@ -1069,7 +1169,12 @@ export const syncModerationReasons = internalAction({
       synced++
     }
 
-    const result = { total: skills.length, synced, noVtAnalysis, done: skills.length < batchSize }
+    const result = {
+      total: skills.length,
+      synced,
+      noVtAnalysis,
+      done: skills.length < batchSize,
+    }
     console.log('[vt:syncModeration] Complete:', result)
     return result
   },
