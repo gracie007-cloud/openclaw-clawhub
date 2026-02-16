@@ -4,7 +4,9 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../../convex/_generated/api'
 import { InstallSwitcher } from '../components/InstallSwitcher'
 import { SkillCard } from '../components/SkillCard'
+import { SkillStatsTripletLine } from '../components/SkillStats'
 import { SoulCard } from '../components/SoulCard'
+import { SoulStatsTripletLine } from '../components/SoulStats'
 import { UserBadge } from '../components/UserBadge'
 import { getSkillBadges } from '../lib/badges'
 import type { PublicSkill, PublicSoul, PublicUser } from '../lib/publicUser'
@@ -100,8 +102,7 @@ function SkillsHome() {
                       link={false}
                     />
                     <div className="stat">
-                      ⭐ {entry.skill.stats.stars} · ⤓ {entry.skill.stats.downloads} · ⤒{' '}
-                      {entry.skill.stats.installsAllTime ?? 0}
+                      <SkillStatsTripletLine stats={entry.skill.stats} />
                     </div>
                   </div>
                 }
@@ -132,8 +133,7 @@ function SkillsHome() {
                       link={false}
                     />
                     <div className="stat">
-                      ⭐ {entry.skill.stats.stars} · ⤓ {entry.skill.stats.downloads} · ⤒{' '}
-                      {entry.skill.stats.installsAllTime ?? 0}
+                      <SkillStatsTripletLine stats={entry.skill.stats} />
                     </div>
                   </div>
                 }
@@ -253,7 +253,7 @@ function OnlyCrabsHome() {
                 summaryFallback="A SOUL.md bundle."
                 meta={
                   <div className="stat">
-                    ⭐ {soul.stats.stars} · ⤓ {soul.stats.downloads} · {soul.stats.versions} v
+                    <SoulStatsTripletLine stats={soul.stats} />
                   </div>
                 }
               />

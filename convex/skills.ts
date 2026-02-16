@@ -1563,33 +1563,74 @@ export const listPublicPageV2 = query({
       ),
     ),
     dir: v.optional(v.union(v.literal('asc'), v.literal('desc'))),
+    highlightedOnly: v.optional(v.boolean()),
     nonSuspiciousOnly: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const sort = args.sort ?? 'newest'
     const dir = args.dir ?? (sort === 'name' ? 'asc' : 'desc')
-    const paginationOpts: { cursor: string | null; numItems: number; id?: number } = {
-      ...args.paginationOpts,
-      numItems: clampInt(args.paginationOpts.numItems, 1, MAX_PUBLIC_LIST_LIMIT),
-    }
+    const { numItems, cursor: initialCursor } = normalizePublicListPagination(args.paginationOpts)
+
+    const runPaginate = (cursor: string | null) =>
+      ctx.db
+        .query('skills')
+        .withIndex(SORT_INDEXES[sort], (q) => q.eq('softDeletedAt', undefined))
+        .order(dir)
+        .paginate({ cursor, numItems })
 
     // Use the index to filter out soft-deleted skills at query time.
     // softDeletedAt === undefined means active (non-deleted) skills only.
-    const result = await ctx.db
-      .query('skills')
-      .withIndex(SORT_INDEXES[sort], (q) => q.eq('softDeletedAt', undefined))
-      .order(dir)
-      .paginate(paginationOpts)
+    const result = await paginateWithStaleCursorRecovery(runPaginate, initialCursor)
 
-    const filteredPage = args.nonSuspiciousOnly
-      ? result.page.filter((skill) => !isSkillSuspicious(skill))
-      : result.page
+    const filteredPage =
+      args.nonSuspiciousOnly || args.highlightedOnly
+        ? result.page.filter((skill) => {
+            if (args.nonSuspiciousOnly && isSkillSuspicious(skill)) return false
+            if (args.highlightedOnly && !isSkillHighlighted(skill)) return false
+            return true
+          })
+        : result.page
 
     // Build the public skill entries (fetch latestVersion + ownerHandle)
     const items = await buildPublicSkillEntries(ctx, filteredPage)
     return { ...result, page: items }
   },
 })
+
+function normalizePublicListPagination(paginationOpts: {
+  cursor?: string | null
+  numItems: number
+}) {
+  return {
+    cursor: paginationOpts.cursor ?? null,
+    numItems: clampInt(paginationOpts.numItems, 1, MAX_PUBLIC_LIST_LIMIT),
+  }
+}
+
+async function paginateWithStaleCursorRecovery<T>(
+  runPaginate: (cursor: string | null) => Promise<T>,
+  initialCursor: string | null,
+) {
+  try {
+    return await runPaginate(initialCursor)
+  } catch (error) {
+    // Some clients may send stale cursors after index/query argument changes.
+    // Recover by restarting from the first page instead of surfacing a 500.
+    if (!initialCursor || !isCursorParseError(error)) {
+      throw error
+    }
+    return runPaginate(null)
+  }
+}
+
+function isCursorParseError(error: unknown) {
+  if (typeof error === 'string') return error.includes('Failed to parse cursor')
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message
+    return typeof message === 'string' && message.includes('Failed to parse cursor')
+  }
+  return false
+}
 
 function sortToIndex(
   sort: 'downloads' | 'stars' | 'installsCurrent' | 'installsAllTime',
