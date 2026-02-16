@@ -14,7 +14,14 @@ import {
 import { cmdInspect } from './cli/commands/inspect.js'
 import { cmdBanUser, cmdSetRole } from './cli/commands/moderation.js'
 import { cmdPublish } from './cli/commands/publish.js'
-import { cmdExplore, cmdInstall, cmdList, cmdSearch, cmdUpdate } from './cli/commands/skills.js'
+import {
+  cmdExplore,
+  cmdInstall,
+  cmdList,
+  cmdSearch,
+  cmdUninstall,
+  cmdUpdate,
+} from './cli/commands/skills.js'
 import { cmdStarSkill } from './cli/commands/star.js'
 import { cmdSync } from './cli/commands/sync.js'
 import { cmdUnstarSkill } from './cli/commands/unstar.js'
@@ -199,6 +206,16 @@ program
   })
 
 program
+  .command('uninstall')
+  .description('Uninstall a skill')
+  .argument('<slug>', 'Skill slug')
+  .option('--yes', 'Skip confirmation')
+  .action(async (slug, options) => {
+    const opts = await resolveGlobalOpts()
+    await cmdUninstall(opts, slug, options, isInputAllowed())
+  })
+
+program
   .command('list')
   .description('List installed skills (from lockfile)')
   .action(async () => {
@@ -305,6 +322,7 @@ program
   .argument('<handleOrId>', 'User handle (default) or user id')
   .option('--id', 'Treat argument as user id')
   .option('--fuzzy', 'Resolve handle via fuzzy user search (admin only)')
+  .option('--reason <reason>', 'Ban reason (optional)')
   .option('--yes', 'Skip confirmation')
   .action(async (handleOrId, options) => {
     const opts = await resolveGlobalOpts()
