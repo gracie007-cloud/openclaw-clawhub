@@ -167,7 +167,7 @@ describe('httpApiV1 handlers', () => {
   it('users/reclaim calls reclaim mutation for admin', async () => {
     const runMutation = vi.fn(async (_mutation: unknown, args: Record<string, unknown>) => {
       if (isRateLimitArgs(args)) return okRate()
-      return { ok: true }
+      return { ok: true, action: 'ownership_transferred' }
     })
     const runQuery = vi.fn(async (_query: unknown, args: Record<string, unknown>) => {
       if ('handle' in args) return { _id: 'users:target' }
@@ -194,12 +194,14 @@ describe('httpApiV1 handlers', () => {
       slug: 'a',
       rightfulOwnerUserId: 'users:target',
       reason: 'r',
+      transferRootSlugOnly: true,
     })
     expect(reclaimCalls[1]?.[1]).toMatchObject({
       actorUserId: 'users:admin',
       slug: 'b',
       rightfulOwnerUserId: 'users:target',
       reason: 'r',
+      transferRootSlugOnly: true,
     })
   })
 
@@ -233,6 +235,19 @@ describe('httpApiV1 handlers', () => {
       new Request('https://example.com/api/v1/search?q=test'),
     )
     expect(response.status).toBe(429)
+  })
+
+  it('429 Retry-After is a relative delay, not an absolute epoch', async () => {
+    const runMutation = vi.fn().mockResolvedValue(blockedRate())
+    const response = await __handlers.searchSkillsV1Handler(
+      makeCtx({ runAction: vi.fn(), runMutation }),
+      new Request('https://example.com/api/v1/search?q=test'),
+    )
+    expect(response.status).toBe(429)
+    const retryAfter = Number(response.headers.get('Retry-After'))
+    // Retry-After must be a small relative delay (seconds), not a Unix epoch
+    expect(retryAfter).toBeGreaterThanOrEqual(1)
+    expect(retryAfter).toBeLessThanOrEqual(120)
   })
 
   it('resolve validates hash', async () => {
@@ -857,6 +872,50 @@ describe('httpApiV1 handlers', () => {
     }
   })
 
+  it('publish multipart ignores mac junk files', async () => {
+    vi.mocked(requireApiTokenUser).mockResolvedValueOnce({
+      userId: 'users:1',
+      user: { handle: 'p' },
+    } as never)
+    vi.mocked(publishVersionForUser).mockResolvedValueOnce({
+      skillId: 's',
+      versionId: 'v',
+      embeddingId: 'e',
+    } as never)
+    const runMutation = vi.fn().mockResolvedValue(okRate())
+    const store = vi.fn().mockResolvedValue('storage:1')
+    const form = new FormData()
+    form.set(
+      'payload',
+      JSON.stringify({
+        slug: 'demo',
+        displayName: 'Demo',
+        version: '1.0.0',
+        changelog: '',
+        tags: ['latest'],
+      }),
+    )
+    form.append('files', new Blob(['hello'], { type: 'text/plain' }), 'SKILL.md')
+    form.append('files', new Blob(['junk'], { type: 'application/octet-stream' }), '.DS_Store')
+    const response = await __handlers.publishSkillV1Handler(
+      makeCtx({ runMutation, storage: { store } }),
+      new Request('https://example.com/api/v1/skills', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer clh_test' },
+        body: form,
+      }),
+    )
+    if (response.status !== 200) {
+      throw new Error(await response.text())
+    }
+
+    expect(store).toHaveBeenCalledTimes(1)
+    const publishArgs = vi.mocked(publishVersionForUser).mock.calls[0]?.[2] as
+      | { files?: Array<{ path: string }> }
+      | undefined
+    expect(publishArgs?.files?.map((file) => file.path)).toEqual(['SKILL.md'])
+  })
+
   it('publish rejects missing token', async () => {
     const runMutation = vi.fn().mockResolvedValue(okRate())
     const response = await __handlers.publishSkillV1Handler(
@@ -1042,6 +1101,7 @@ describe('httpApiV1 handlers', () => {
   })
 
   it('stars add succeeds', async () => {
+    vi.mocked(getOptionalApiTokenUserId).mockResolvedValue('users:1' as never)
     vi.mocked(requireApiTokenUser).mockResolvedValue({
       userId: 'users:1',
       user: { handle: 'p' },
@@ -1049,7 +1109,6 @@ describe('httpApiV1 handlers', () => {
     const runQuery = vi.fn().mockResolvedValue({ _id: 'skills:1' })
     const runMutation = vi
       .fn()
-      .mockResolvedValueOnce(okRate())
       .mockResolvedValueOnce(okRate())
       .mockResolvedValueOnce({ ok: true, starred: true, alreadyStarred: false })
     const response = await __handlers.starsPostRouterV1Handler(
@@ -1066,6 +1125,7 @@ describe('httpApiV1 handlers', () => {
   })
 
   it('stars delete succeeds', async () => {
+    vi.mocked(getOptionalApiTokenUserId).mockResolvedValue('users:1' as never)
     vi.mocked(requireApiTokenUser).mockResolvedValue({
       userId: 'users:1',
       user: { handle: 'p' },
@@ -1073,7 +1133,6 @@ describe('httpApiV1 handlers', () => {
     const runQuery = vi.fn().mockResolvedValue({ _id: 'skills:1' })
     const runMutation = vi
       .fn()
-      .mockResolvedValueOnce(okRate())
       .mockResolvedValueOnce(okRate())
       .mockResolvedValueOnce({ ok: true, unstarred: true, alreadyUnstarred: false })
     const response = await __handlers.starsDeleteRouterV1Handler(

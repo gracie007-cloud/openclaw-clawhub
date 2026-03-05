@@ -1,7 +1,7 @@
 import { v } from 'convex/values'
 import type { Doc } from './_generated/dataModel'
 import { mutation, query } from './_generated/server'
-import { addHandler, removeHandler } from './comments.handlers'
+import { addHandler, removeHandler, reportHandler } from './comments.handlers'
 import { type PublicUser, toPublicUser } from './lib/public'
 
 export const listBySkill = query({
@@ -14,15 +14,15 @@ export const listBySkill = query({
       .order('desc')
       .take(limit)
 
-    const visible = comments.filter((comment) => !comment.softDeletedAt)
-    return Promise.all(
-      visible.map(
-        async (comment): Promise<{ comment: Doc<'comments'>; user: PublicUser | null }> => ({
-          comment,
-          user: toPublicUser(await ctx.db.get(comment.userId)),
-        }),
-      ),
+    const rows = await Promise.all(
+      comments.map(async (comment): Promise<{ comment: Doc<'comments'>; user: PublicUser } | null> => {
+        if (comment.softDeletedAt) return null
+        const user = toPublicUser(await ctx.db.get(comment.userId))
+        if (!user) return null
+        return { comment, user }
+      }),
     )
+    return rows.filter((row): row is { comment: Doc<'comments'>; user: PublicUser } => row !== null)
   },
 })
 
@@ -34,4 +34,9 @@ export const add = mutation({
 export const remove = mutation({
   args: { commentId: v.id('comments') },
   handler: removeHandler,
+})
+
+export const report = mutation({
+  args: { commentId: v.id('comments'), reason: v.string() },
+  handler: reportHandler,
 })

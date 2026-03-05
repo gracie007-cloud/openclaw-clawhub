@@ -1,4 +1,4 @@
-import { apiRequest, fetchText } from '../../http.js'
+import { apiRequest, fetchText, registryUrl } from '../../http.js'
 import {
   ApiRoutes,
   ApiV1SkillResponseSchema,
@@ -25,6 +25,13 @@ type FileEntry = {
   size: number | null
   sha256: string | null
   contentType: string | null
+}
+
+type SecurityStatus = {
+  status: 'clean' | 'suspicious' | 'malicious' | 'pending' | 'error'
+  hasWarnings: boolean
+  checkedAt: number | null
+  model: string | null
 }
 
 export async function cmdInspect(opts: GlobalOpts, slug: string, options: InspectOptions = {}) {
@@ -78,7 +85,7 @@ export async function cmdInspect(opts: GlobalOpts, slug: string, options: Inspec
     let versionsList: { items?: unknown[]; nextCursor?: string | null } | null = null
     if (options.versions) {
       const limit = clampLimit(options.limit ?? 25, 25)
-      const url = new URL(`${ApiRoutes.skills}/${encodeURIComponent(trimmed)}/versions`, registry)
+      const url = registryUrl(`${ApiRoutes.skills}/${encodeURIComponent(trimmed)}/versions`, registry)
       url.searchParams.set('limit', String(limit))
       spinner.text = `Fetching versions (${limit})`
       versionsList = await apiRequest(
@@ -90,7 +97,7 @@ export async function cmdInspect(opts: GlobalOpts, slug: string, options: Inspec
 
     let fileContent: string | null = null
     if (options.file) {
-      const url = new URL(`${ApiRoutes.skills}/${encodeURIComponent(trimmed)}/file`, registry)
+      const url = registryUrl(`${ApiRoutes.skills}/${encodeURIComponent(trimmed)}/file`, registry)
       url.searchParams.set('path', options.file)
       if (options.version) {
         url.searchParams.set('version', options.version)
@@ -130,6 +137,7 @@ export async function cmdInspect(opts: GlobalOpts, slug: string, options: Inspec
 
     if (shouldPrintMeta && versionResult?.version) {
       printVersionSummary(versionResult.version)
+      printSecuritySummary(versionResult.version)
     }
 
     if (versionsList?.items && Array.isArray(versionsList.items)) {
@@ -256,6 +264,50 @@ function formatVersionLine(item: unknown) {
   const changelog = typeof entry.changelog === 'string' ? entry.changelog : ''
   const snippet = changelog ? `  ${truncate(changelog, 80)}` : ''
   return `${version}  ${createdAt}${snippet}`
+}
+
+function printSecuritySummary(version: unknown) {
+  if (!version || typeof version !== 'object') return
+  const sec = normalizeSecurity((version as { security?: unknown }).security)
+  if (!sec) return
+  console.log(`Security: ${sec.status.toUpperCase()}`)
+  if (sec.hasWarnings) {
+    console.log('Warnings: yes')
+  }
+  if (typeof sec.checkedAt === 'number') {
+    console.log(`Checked: ${formatTimestamp(sec.checkedAt)}`)
+  }
+  if (sec.model) {
+    console.log(`Model: ${sec.model}`)
+  }
+}
+
+function normalizeSecurity(security: unknown): SecurityStatus | null {
+  if (!security || typeof security !== 'object') return null
+  const value = security as {
+    status?: unknown
+    hasWarnings?: unknown
+    checkedAt?: unknown
+    model?: unknown
+  }
+  if (
+    value.status !== 'clean' &&
+    value.status !== 'suspicious' &&
+    value.status !== 'malicious' &&
+    value.status !== 'pending' &&
+    value.status !== 'error'
+  ) {
+    return null
+  }
+  if (typeof value.hasWarnings !== 'boolean') return null
+  const checkedAt = typeof value.checkedAt === 'number' ? value.checkedAt : null
+  const model = typeof value.model === 'string' ? value.model : null
+  return {
+    status: value.status,
+    hasWarnings: value.hasWarnings,
+    checkedAt,
+    model,
+  }
 }
 
 function formatFileLine(file: FileEntry) {

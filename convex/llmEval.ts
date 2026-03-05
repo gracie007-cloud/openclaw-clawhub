@@ -2,6 +2,13 @@ import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Doc, Id } from './_generated/dataModel'
 import { internalAction } from './_generated/server'
+import {
+  assembleCommentScamEvalUserMessage,
+  COMMENT_SCAM_EVALUATOR_SYSTEM_PROMPT,
+  COMMENT_SCAM_EVAL_MAX_OUTPUT_TOKENS,
+  getCommentScamEvalModel,
+  parseCommentScamEvalResponse,
+} from './lib/commentScamPrompt'
 import type { SkillEvalContext } from './lib/securityPrompt'
 import {
   assembleEvalUserMessage,
@@ -11,31 +18,11 @@ import {
   parseLlmEvalResponse,
   SECURITY_EVALUATOR_SYSTEM_PROMPT,
 } from './lib/securityPrompt'
+import { extractResponseText } from './lib/openaiResponse'
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-function extractResponseText(payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null
-  const output = (payload as { output?: unknown }).output
-  if (!Array.isArray(output)) return null
-  const chunks: string[] = []
-  for (const item of output) {
-    if (!item || typeof item !== 'object') continue
-    if ((item as { type?: unknown }).type !== 'message') continue
-    const content = (item as { content?: unknown }).content
-    if (!Array.isArray(content)) continue
-    for (const part of content) {
-      if (!part || typeof part !== 'object') continue
-      if ((part as { type?: unknown }).type !== 'output_text') continue
-      const text = (part as { text?: unknown }).text
-      if (typeof text === 'string' && text.trim()) chunks.push(text)
-    }
-  }
-  const joined = chunks.join('\n').trim()
-  return joined || null
-}
 
 function verdictToStatus(verdict: string): string {
   switch (verdict) {
@@ -379,5 +366,89 @@ export const backfillLlmEval = internalAction({
     }
     console.log('[llmEval:backfill] Complete:', result)
     return result
+  },
+})
+
+export const evaluateCommentForScam = internalAction({
+  args: {
+    commentId: v.id('comments'),
+    skillId: v.id('skills'),
+    userId: v.id('users'),
+    body: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const apiKey = process.env.OPENAI_API_KEY
+    if (!apiKey) {
+      return { ok: false as const, error: 'OPENAI_API_KEY not configured' }
+    }
+
+    const model = getCommentScamEvalModel()
+    const input = assembleCommentScamEvalUserMessage({
+      commentId: String(args.commentId),
+      skillId: String(args.skillId),
+      userId: String(args.userId),
+      body: args.body,
+    })
+
+    const requestBody = JSON.stringify({
+      model,
+      instructions: COMMENT_SCAM_EVALUATOR_SYSTEM_PROMPT,
+      input,
+      max_output_tokens: COMMENT_SCAM_EVAL_MAX_OUTPUT_TOKENS,
+      text: {
+        format: {
+          type: 'json_object',
+        },
+      },
+    })
+
+    const MAX_RETRIES = 3
+    let response: Response | null = null
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      response = await fetch('https://api.openai.com/v1/responses', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: requestBody,
+      })
+
+      if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
+        const delay = 2 ** attempt * 2000 + Math.random() * 1000
+        await new Promise((resolve) => setTimeout(resolve, delay))
+        continue
+      }
+      break
+    }
+
+    if (!response || !response.ok) {
+      const errorText = response ? await response.text() : 'No response'
+      return {
+        ok: false as const,
+        error: `OpenAI API error (${response?.status}): ${errorText.slice(0, 200)}`,
+      }
+    }
+
+    const payload = (await response.json()) as unknown
+    const raw = extractResponseText(payload)
+    if (!raw) {
+      return { ok: false as const, error: 'Empty response from OpenAI' }
+    }
+
+    const parsed = parseCommentScamEvalResponse(raw)
+    if (!parsed) {
+      console.error(`[commentScam] Parse failure for ${args.commentId}: ${raw.slice(0, 400)}`)
+      return { ok: false as const, error: 'Failed to parse scam evaluation response' }
+    }
+
+    return {
+      ok: true as const,
+      model,
+      verdict: parsed.verdict,
+      confidence: parsed.confidence,
+      explanation: parsed.explanation,
+      evidence: parsed.evidence,
+    }
   },
 })

@@ -29,6 +29,34 @@ Env equivalents:
 - `CLAWHUB_REGISTRY` (legacy `CLAWDHUB_REGISTRY`)
 - `CLAWHUB_WORKDIR` (legacy `CLAWDHUB_WORKDIR`)
 
+### HTTP proxy
+
+The CLI respects standard HTTP proxy environment variables for systems behind
+corporate proxies or restricted networks:
+
+- `HTTPS_PROXY` / `https_proxy`
+- `HTTP_PROXY` / `http_proxy`
+- `NO_PROXY` / `no_proxy`
+
+When any of these variables is set, the CLI routes outbound requests through
+the specified proxy. `HTTPS_PROXY` is used for HTTPS requests, `HTTP_PROXY`
+for plain HTTP. `NO_PROXY` / `no_proxy` is respected to bypass the proxy for
+specific hosts or domains.
+
+This is required on systems where direct outbound connections are blocked
+(e.g. Docker containers, Hetzner VPS with proxy-only internet, corporate
+firewalls).
+
+Example:
+
+```bash
+export HTTPS_PROXY=http://proxy.example.com:3128
+export NO_PROXY=localhost,127.0.0.1
+clawhub search "my query"
+```
+
+When no proxy variable is set, behavior is unchanged (direct connections).
+
 ## Config file
 
 Stores your API token + cached registry URL.
@@ -111,24 +139,24 @@ Stores your API token + cached registry URL.
 
 ### `delete <slug>`
 
-- Soft-delete a skill (moderator/admin only).
+- Soft-delete a skill (owner, moderator, or admin).
 - Calls `DELETE /api/v1/skills/{slug}`.
 - `--yes` skips confirmation.
 
 ### `undelete <slug>`
 
-- Restore a hidden skill (moderator/admin only).
+- Restore a hidden skill (owner, moderator, or admin).
 - Calls `POST /api/v1/skills/{slug}/undelete`.
 - `--yes` skips confirmation.
 
 ### `hide <slug>`
 
-- Hide a skill (moderator/admin only).
+- Hide a skill (owner, moderator, or admin).
 - Alias for `delete`.
 
 ### `unhide <slug>`
 
-- Unhide a skill (moderator/admin only).
+- Unhide a skill (owner, moderator, or admin).
 - Alias for `undelete`.
 
 ### `ban-user <handleOrId>`

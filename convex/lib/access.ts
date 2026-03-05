@@ -1,6 +1,6 @@
 import { getAuthUserId } from '@convex-dev/auth/server'
 import { internal } from '../_generated/api'
-import type { Doc } from '../_generated/dataModel'
+import type { Doc, Id } from '../_generated/dataModel'
 import type { ActionCtx, MutationCtx, QueryCtx } from '../_generated/server'
 
 export type Role = 'admin' | 'moderator' | 'user'
@@ -13,7 +13,9 @@ export async function requireUser(ctx: MutationCtx | QueryCtx) {
   return { userId, user }
 }
 
-export async function requireUserFromAction(ctx: ActionCtx) {
+export async function requireUserFromAction(
+  ctx: ActionCtx,
+): Promise<{ userId: Id<'users'>; user: Doc<'users'> }> {
   const userId = await getAuthUserId(ctx)
   if (!userId) throw new Error('Unauthorized')
   const user = await ctx.runQuery(internal.users.getByIdInternal, { userId })

@@ -1,6 +1,7 @@
 import { v } from 'convex/values'
 import { internal } from './_generated/api'
 import type { Id } from './_generated/dataModel'
+import type { ActionCtx } from './_generated/server'
 import { action, internalAction, internalMutation } from './_generated/server'
 import { buildDeterministicZip } from './lib/skillZip'
 
@@ -140,6 +141,13 @@ type PendingScanSkill = {
   checkCount: number
 }
 
+type SkillActivationCandidate = {
+  moderationStatus?: string
+  moderationReason?: string
+  moderationFlags?: string[]
+  softDeletedAt?: number
+}
+
 type PollPendingScansResult = {
   processed: number
   updated: number
@@ -232,6 +240,23 @@ type SyncModerationReasonsResult = {
   done: boolean
 }
 
+const VT_PENDING_REASONS = new Set(['pending.scan', 'scanner.vt.pending', 'pending.scan.stale'])
+
+function shouldActivateWhenVtUnavailable(skill: SkillActivationCandidate | null | undefined) {
+  if (!skill || skill.softDeletedAt) return false
+  if (skill.moderationFlags?.includes('blocked.malware')) return false
+  if (skill.moderationStatus === 'active') return false
+  const reason = skill.moderationReason
+  return typeof reason === 'string' && VT_PENDING_REASONS.has(reason)
+}
+
+async function activateSkillWhenVtUnavailable(ctx: ActionCtx, skillId: Id<'skills'>) {
+  const skill = await ctx.runQuery(internal.skills.getSkillByIdInternal, { skillId })
+  if (!shouldActivateWhenVtUnavailable(skill)) return
+
+  await ctx.runMutation(internal.skills.setSkillModerationStatusActiveInternal, { skillId })
+}
+
 export const fetchResults = action({
   args: {
     sha256hash: v.optional(v.string()),
@@ -318,7 +343,13 @@ export const scanWithVirusTotal = internalAction({
   handler: async (ctx, args): Promise<void> => {
     const apiKey = process.env.VT_API_KEY
     if (!apiKey) {
-      console.log('VT_API_KEY not configured, skipping scan')
+      console.log('VT_API_KEY not configured, skipping scan — activating skill')
+      const version = await ctx.runQuery(internal.skills.getVersionByIdInternal, {
+        versionId: args.versionId,
+      })
+      if (version) {
+        await activateSkillWhenVtUnavailable(ctx, version.skillId)
+      }
       return
     }
 
@@ -566,6 +597,7 @@ export const pollPendingScans = internalAction({
               vtAnalysis: { status: 'stale', checkedAt: Date.now() },
 >>>>>>> 652beef9c12ef7940e0e3c830fcf433755cdc3f8
             })
+            await activateSkillWhenVtUnavailable(ctx, skillId)
             staled++
           }
           continue
@@ -596,6 +628,7 @@ export const pollPendingScans = internalAction({
               vtAnalysis: { status: 'stale', checkedAt: Date.now() },
 >>>>>>> 652beef9c12ef7940e0e3c830fcf433755cdc3f8
             })
+            await activateSkillWhenVtUnavailable(ctx, skillId)
             staled++
           }
           continue
@@ -697,6 +730,10 @@ async function requestRescan(apiKey: string, sha256hash: string): Promise<boolea
   }
 }
 
+export const __test = {
+  shouldActivateWhenVtUnavailable,
+}
+
 /**
  * Backfill function to process ALL pending skills at once
  * Run manually to clear backlog
@@ -737,6 +774,8 @@ export const backfillPendingScans = internalAction({
       internal.skills.getPendingScanSkillsInternal,
       {
         limit: 10000,
+        exhaustive: true,
+        skipRecentMinutes: 0,
       },
     )
 
@@ -869,7 +908,7 @@ export const rescanActiveSkills = internalAction({
       `[vt:rescan] Processing batch of ${batch.skills.length} skills (cursor=${cursor}, accumulated=${accTotal})`,
     )
 
-    for (const { versionId, sha256hash, slug } of batch.skills) {
+    for (const { versionId, sha256hash, slug, wasFlagged } of batch.skills) {
       try {
         const vtResult = await checkExistingFile(apiKey, sha256hash)
 
@@ -913,6 +952,15 @@ export const rescanActiveSkills = internalAction({
           accFlaggedSkills.push({ slug, status })
           await ctx.runMutation(internal.skills.escalateByVtInternal, {
             sha256hash,
+            status,
+          })
+          accUpdated++
+        } else if (wasFlagged && status === 'clean') {
+          // Verdict improved from suspicious → clean: clear the stale moderation flag
+          console.log(`[vt:rescan] ${slug}: verdict improved to clean, clearing suspicious flag`)
+          await ctx.runMutation(internal.skills.approveSkillByHashInternal, {
+            sha256hash,
+            scanner: 'vt',
             status,
           })
           accUpdated++

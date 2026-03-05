@@ -9,6 +9,7 @@
  */
 
 import type * as auth from "../auth.js";
+import type * as commentModeration from "../commentModeration.js";
 import type * as comments from "../comments.js";
 import type * as crons from "../crons.js";
 import type * as devSeed from "../devSeed.js";
@@ -38,6 +39,7 @@ import type * as lib_apiTokenAuth from "../lib/apiTokenAuth.js";
 import type * as lib_badges from "../lib/badges.js";
 import type * as lib_batching from "../lib/batching.js";
 import type * as lib_changelog from "../lib/changelog.js";
+import type * as lib_commentScamPrompt from "../lib/commentScamPrompt.js";
 import type * as lib_contentTypes from "../lib/contentTypes.js";
 import type * as lib_embeddingVisibility from "../lib/embeddingVisibility.js";
 import type * as lib_embeddings from "../lib/embeddings.js";
@@ -48,11 +50,14 @@ import type * as lib_githubImport from "../lib/githubImport.js";
 import type * as lib_githubProfileSync from "../lib/githubProfileSync.js";
 import type * as lib_githubRestoreHelpers from "../lib/githubRestoreHelpers.js";
 import type * as lib_githubSoulBackup from "../lib/githubSoulBackup.js";
+import type * as lib_globalStats from "../lib/globalStats.js";
 import type * as lib_httpHeaders from "../lib/httpHeaders.js";
 import type * as lib_httpRateLimit from "../lib/httpRateLimit.js";
 import type * as lib_leaderboards from "../lib/leaderboards.js";
 import type * as lib_moderation from "../lib/moderation.js";
+import type * as lib_openaiResponse from "../lib/openaiResponse.js";
 import type * as lib_public from "../lib/public.js";
+import type * as lib_reporting from "../lib/reporting.js";
 import type * as lib_reservedSlugs from "../lib/reservedSlugs.js";
 import type * as lib_searchText from "../lib/searchText.js";
 import type * as lib_securityPrompt from "../lib/securityPrompt.js";
@@ -98,6 +103,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   auth: typeof auth;
+  commentModeration: typeof commentModeration;
   comments: typeof comments;
   crons: typeof crons;
   devSeed: typeof devSeed;
@@ -127,6 +133,7 @@ declare const fullApi: ApiFromModules<{
   "lib/badges": typeof lib_badges;
   "lib/batching": typeof lib_batching;
   "lib/changelog": typeof lib_changelog;
+  "lib/commentScamPrompt": typeof lib_commentScamPrompt;
   "lib/contentTypes": typeof lib_contentTypes;
   "lib/embeddingVisibility": typeof lib_embeddingVisibility;
   "lib/embeddings": typeof lib_embeddings;
@@ -137,11 +144,14 @@ declare const fullApi: ApiFromModules<{
   "lib/githubProfileSync": typeof lib_githubProfileSync;
   "lib/githubRestoreHelpers": typeof lib_githubRestoreHelpers;
   "lib/githubSoulBackup": typeof lib_githubSoulBackup;
+  "lib/globalStats": typeof lib_globalStats;
   "lib/httpHeaders": typeof lib_httpHeaders;
   "lib/httpRateLimit": typeof lib_httpRateLimit;
   "lib/leaderboards": typeof lib_leaderboards;
   "lib/moderation": typeof lib_moderation;
+  "lib/openaiResponse": typeof lib_openaiResponse;
   "lib/public": typeof lib_public;
+  "lib/reporting": typeof lib_reporting;
   "lib/reservedSlugs": typeof lib_reservedSlugs;
   "lib/searchText": typeof lib_searchText;
   "lib/securityPrompt": typeof lib_securityPrompt;

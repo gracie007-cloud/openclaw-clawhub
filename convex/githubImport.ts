@@ -20,7 +20,7 @@ import {
   suggestVersion,
 } from './lib/githubImport'
 import { publishVersionForUser } from './lib/skillPublish'
-import { sanitizePath } from './lib/skills'
+import { isMacJunkPath, sanitizePath } from './lib/skills'
 
 const MAX_SELECTED_BYTES = 50 * 1024 * 1024
 const MAX_UNZIPPED_BYTES = 80 * 1024 * 1024
@@ -192,7 +192,12 @@ export const importGitHubSkill = action({
 
       const sha256 = await sha256Hex(bytes)
       const safeBytes = new Uint8Array(bytes)
-      const storageId = await ctx.storage.store(new Blob([safeBytes], { type: 'text/plain' }))
+      let storageId: Id<'_storage'>
+      try {
+        storageId = await ctx.storage.store(new Blob([safeBytes], { type: 'text/plain' }))
+      } catch (error) {
+        throw new ConvexError(buildStoreFailureMessage(sanitized, bytes.byteLength, error))
+      }
       storedFiles.push({
         path: sanitized,
         size: bytes.byteLength,
@@ -213,23 +218,28 @@ export const importGitHubSkill = action({
     if (!displayName) throw new ConvexError('Display name required')
     if (!version || !semver.valid(version)) throw new ConvexError('Version must be valid semver')
 
-    const result = await publishVersionForUser(ctx, userId, {
-      slug: slugBase,
-      displayName,
-      version,
-      changelog: '',
-      tags,
-      files: storedFiles,
-      source: {
-        kind: 'github',
-        url: resolved.originalUrl,
-        repo: `${resolved.owner}/${resolved.repo}`,
-        ref: resolved.ref,
-        commit: resolved.commit,
-        path: candidate.path,
-        importedAt: Date.now(),
-      },
-    })
+    let result: Awaited<ReturnType<typeof publishVersionForUser>>
+    try {
+      result = await publishVersionForUser(ctx, userId, {
+        slug: slugBase,
+        displayName,
+        version,
+        changelog: '',
+        tags,
+        files: storedFiles,
+        source: {
+          kind: 'github',
+          url: resolved.originalUrl,
+          repo: `${resolved.owner}/${resolved.repo}`,
+          ref: resolved.ref,
+          commit: resolved.commit,
+          path: candidate.path,
+          importedAt: Date.now(),
+        },
+      })
+    } catch (error) {
+      throw new ConvexError(buildPublishFailureMessage(error))
+    }
 
     return { ok: true, slug: slugBase, version, ...result }
   },
@@ -244,7 +254,7 @@ function unzipToEntries(zipBytes: Uint8Array) {
   for (const [rawPath, bytes] of Object.entries(entries)) {
     const normalizedPath = normalizeZipPath(rawPath)
     if (!normalizedPath) continue
-    if (isJunkPath(normalizedPath)) continue
+    if (isMacJunkPath(normalizedPath)) continue
     if (!bytes) continue
     if (bytes.byteLength > MAX_SINGLE_FILE_BYTES) continue
     totalBytes += bytes.byteLength
@@ -308,10 +318,20 @@ function normalizeZipPath(path: string) {
   return normalized
 }
 
-function isJunkPath(path: string) {
-  const normalized = path.toLowerCase()
-  if (normalized.startsWith('__macosx/')) return true
-  if (normalized.endsWith('/.ds_store')) return true
-  if (normalized === '.ds_store') return true
-  return false
+function toErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function buildStoreFailureMessage(path: string, sizeBytes: number, error: unknown) {
+  return `Failed to store file "${path}" (${sizeBytes} bytes). ${toErrorMessage(error)}`
+}
+
+function buildPublishFailureMessage(error: unknown) {
+  return `Import failed during publish: ${toErrorMessage(error)}. Check skill format, slug availability, and try again.`
+}
+
+export const __test = {
+  buildPublishFailureMessage,
+  buildStoreFailureMessage,
+  unzipToEntries,
 }

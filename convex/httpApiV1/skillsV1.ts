@@ -41,7 +41,12 @@ type ListSkillsResult = {
       updatedAt: number
       latestVersionId?: Id<'skillVersions'>
     }
-    latestVersion: { version: string; createdAt: number; changelog: string } | null
+    latestVersion: {
+      version: string
+      createdAt: number
+      changelog: string
+      parsed?: { clawdis?: { os?: string[]; nix?: { plugin?: boolean; systems?: string[] } } }
+    } | null
   }>
   nextCursor: string | null
 }
@@ -202,6 +207,12 @@ export async function listSkillsV1Handler(ctx: ActionCtx, request: Request) {
           changelog: item.latestVersion.changelog,
         }
       : null,
+    metadata: item.latestVersion?.parsed?.clawdis
+      ? {
+          os: item.latestVersion.parsed.clawdis.os ?? null,
+          systems: item.latestVersion.parsed.clawdis.nix?.systems ?? null,
+        }
+      : null,
   }))
 
   return json({ items, nextCursor: result.nextCursor ?? null }, 200, rate.headers)
@@ -292,6 +303,12 @@ export async function skillsGetRouterV1Handler(ctx: ActionCtx, request: Request)
               changelog: result.latestVersion.changelog,
             }
           : null,
+        metadata: result.latestVersion?.parsed?.clawdis
+          ? {
+              os: result.latestVersion.parsed.clawdis.os ?? null,
+              systems: result.latestVersion.parsed.clawdis.nix?.systems ?? null,
+            }
+          : null,
         owner: result.owner
           ? {
               handle: result.owner.handle ?? null,
@@ -348,6 +365,43 @@ export async function skillsGetRouterV1Handler(ctx: ActionCtx, request: Request)
     if (!version) return text('Version not found', 404, rate.headers)
     if (version.softDeletedAt) return text('Version not available', 410, rate.headers)
 
+    // Map llmAnalysis to security status
+    let security = undefined
+    if (version.llmAnalysis) {
+      const analysis = version.llmAnalysis
+      let status: 'clean' | 'suspicious' | 'malicious' | 'pending' | 'error'
+      switch (analysis.verdict) {
+        case 'benign':
+          status = 'clean'
+          break
+        case 'suspicious':
+          status = 'suspicious'
+          break
+        case 'malicious':
+          status = 'malicious'
+          break
+        default:
+          status = analysis.status === 'error' ? 'error' : 'pending'
+      }
+
+      const hasWarnings =
+        analysis.verdict === 'suspicious' ||
+        analysis.verdict === 'malicious' ||
+        (Array.isArray(analysis.dimensions) &&
+          analysis.dimensions.some((dimension) => {
+            if (!dimension || typeof dimension !== 'object') return false
+            const rating = (dimension as { rating?: unknown }).rating
+            return typeof rating === 'string' && rating !== 'ok'
+          }))
+
+      security = {
+        status,
+        hasWarnings,
+        checkedAt: analysis.checkedAt ?? null,
+        model: analysis.model || null,
+      }
+    }
+
     return json(
       {
         skill: { slug: skill.slug, displayName: skill.displayName },
@@ -362,6 +416,7 @@ export async function skillsGetRouterV1Handler(ctx: ActionCtx, request: Request)
             sha256: file.sha256,
             contentType: file.contentType ?? null,
           })),
+          security,
         },
       },
       200,

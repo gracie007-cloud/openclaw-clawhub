@@ -15,7 +15,11 @@ OpenAPI: `/api/v1/openapi.json`.
 
 ## Rate limits
 
-Enforced per IP + per API key:
+Enforcement model:
+
+- Anonymous requests: enforced per IP.
+- Authenticated requests (valid Bearer token): enforced per user bucket.
+- If token is missing/invalid, behavior falls back to IP enforcement.
 
 - Read: 120/min per IP, 600/min per key
 - Write: 30/min per IP, 120/min per key
@@ -23,12 +27,43 @@ Enforced per IP + per API key:
 
 Headers:
 
-- `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After` (when limited)
+- Legacy compatibility: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+- Standardized: `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`
+- On `429`: `Retry-After`
+
+Header semantics:
+
+- `X-RateLimit-Reset`: absolute Unix epoch seconds
+- `RateLimit-Reset`: seconds until reset (delay)
+- `Retry-After`: seconds to wait before retry (delay) on `429`
+
+Example `429` response:
+
+```http
+HTTP/2 429
+content-type: text/plain; charset=utf-8
+x-ratelimit-limit: 20
+x-ratelimit-remaining: 0
+x-ratelimit-reset: 1771404540
+ratelimit-limit: 20
+ratelimit-remaining: 0
+ratelimit-reset: 34
+retry-after: 34
+
+Rate limit exceeded
+```
+
+Client guidance:
+
+- If `Retry-After` exists, wait that many seconds before retry.
+- Use jittered backoff to avoid synchronized retries.
+- If `Retry-After` is missing, fallback to `RateLimit-Reset` (or compute from `X-RateLimit-Reset`).
 
 IP source:
 
 - Uses `cf-connecting-ip` (Cloudflare) for client IP by default.
-- Set `TRUST_FORWARDED_IPS=true` to opt in to `x-real-ip`, `x-forwarded-for`, or `fly-client-ip` (non-Cloudflare deployments).
+- Set `TRUST_FORWARDED_IPS=true` to opt in to `x-forwarded-for`, `x-real-ip`, or `fly-client-ip` (non-Cloudflare deployments).
+- If you run behind a reverse proxy/load balancer, ensure real client IP headers are preserved and trusted correctly, or rate limits may be too strict due to shared proxy IPs.
 
 ## Public endpoints (no auth)
 
@@ -65,7 +100,7 @@ Notes:
 Response:
 
 ```json
-{ "items": [{ "slug": "gifgrep", "displayName": "GifGrep", "summary": "…", "tags": { "latest": "1.2.3" }, "stats": {}, "createdAt": 0, "updatedAt": 0, "latestVersion": { "version": "1.2.3", "createdAt": 0, "changelog": "…" } }], "nextCursor": null }
+{ "items": [{ "slug": "gifgrep", "displayName": "GifGrep", "summary": "…", "tags": { "latest": "1.2.3" }, "stats": {}, "createdAt": 0, "updatedAt": 0, "latestVersion": { "version": "1.2.3", "createdAt": 0, "changelog": "…" }, "metadata": { "os": ["macos"], "systems": ["aarch64-darwin"] } }], "nextCursor": null }
 ```
 
 ### `GET /api/v1/skills/{slug}`
@@ -73,8 +108,14 @@ Response:
 Response:
 
 ```json
-{ "skill": { "slug": "gifgrep", "displayName": "GifGrep", "summary": "…", "tags": { "latest": "1.2.3" }, "stats": {}, "createdAt": 0, "updatedAt": 0 }, "latestVersion": { "version": "1.2.3", "createdAt": 0, "changelog": "…" }, "owner": { "handle": "steipete", "displayName": "Peter", "image": null } }
+{ "skill": { "slug": "gifgrep", "displayName": "GifGrep", "summary": "…", "tags": { "latest": "1.2.3" }, "stats": {}, "createdAt": 0, "updatedAt": 0 }, "latestVersion": { "version": "1.2.3", "createdAt": 0, "changelog": "…" }, "metadata": { "os": ["macos"], "systems": ["aarch64-darwin"] }, "owner": { "handle": "steipete", "displayName": "Peter", "image": null } }
 ```
+
+Notes:
+
+- `metadata.os`: OS restrictions declared in skill frontmatter (e.g. `["macos"]`, `["linux"]`). `null` if not declared.
+- `metadata.systems`: Nix system targets (e.g. `["aarch64-darwin", "x86_64-linux"]`). `null` if not declared.
+- `metadata` is `null` if the skill has no platform metadata.
 
 ### `GET /api/v1/skills/{slug}/versions`
 
@@ -154,7 +195,7 @@ Publishes a new version.
 
 ### `DELETE /api/v1/skills/{slug}` / `POST /api/v1/skills/{slug}/undelete`
 
-Soft-delete / restore a skill (moderator/admin only).
+Soft-delete / restore a skill (owner, moderator, or admin).
 
 Status codes:
 

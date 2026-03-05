@@ -310,6 +310,14 @@ const skillEmbeddings = defineTable({
     filterFields: ['visibility'],
   })
 
+// Lightweight lookup: embeddingId → skillId (~100 bytes per doc).
+// Avoids reading full skillEmbeddings docs (~12KB each with vector)
+// during search hydration.
+const embeddingSkillMap = defineTable({
+  embeddingId: v.id('skillEmbeddings'),
+  skillId: v.id('skills'),
+}).index('by_embedding', ['embeddingId'])
+
 const skillDailyStats = defineTable({
   skillId: v.id('skills'),
   day: v.number(),
@@ -339,6 +347,12 @@ const skillStatBackfillState = defineTable({
   key: v.string(),
   cursor: v.optional(v.string()),
   doneAt: v.optional(v.number()),
+  updatedAt: v.number(),
+}).index('by_key', ['key'])
+
+const globalStats = defineTable({
+  key: v.string(),
+  activeSkillsCount: v.number(),
   updatedAt: v.number(),
 }).index('by_key', ['key'])
 
@@ -395,12 +409,37 @@ const comments = defineTable({
   skillId: v.id('skills'),
   userId: v.id('users'),
   body: v.string(),
+  reportCount: v.optional(v.number()),
+  lastReportedAt: v.optional(v.number()),
+  scamScanVerdict: v.optional(
+    v.union(v.literal('not_scam'), v.literal('likely_scam'), v.literal('certain_scam')),
+  ),
+  scamScanConfidence: v.optional(v.union(v.literal('low'), v.literal('medium'), v.literal('high'))),
+  scamScanExplanation: v.optional(v.string()),
+  scamScanEvidence: v.optional(v.array(v.string())),
+  scamScanModel: v.optional(v.string()),
+  scamScanCheckedAt: v.optional(v.number()),
+  scamBanTriggeredAt: v.optional(v.number()),
   createdAt: v.number(),
   softDeletedAt: v.optional(v.number()),
   deletedBy: v.optional(v.id('users')),
 })
   .index('by_skill', ['skillId'])
   .index('by_user', ['userId'])
+  .index('by_scam_scan_checked', ['scamScanCheckedAt'])
+
+const commentReports = defineTable({
+  commentId: v.id('comments'),
+  skillId: v.id('skills'),
+  userId: v.id('users'),
+  reason: v.optional(v.string()),
+  createdAt: v.number(),
+})
+  .index('by_comment', ['commentId'])
+  .index('by_comment_createdAt', ['commentId', 'createdAt'])
+  .index('by_skill', ['skillId'])
+  .index('by_user', ['userId'])
+  .index('by_comment_user', ['commentId', 'userId'])
 
 const skillReports = defineTable({
   skillId: v.id('skills'),
@@ -570,13 +609,16 @@ export default defineSchema({
   skillBadges,
   soulVersionFingerprints,
   skillEmbeddings,
+  embeddingSkillMap,
   soulEmbeddings,
   skillDailyStats,
   skillLeaderboards,
   skillStatBackfillState,
+  globalStats,
   skillStatEvents,
   skillStatUpdateCursors,
   comments,
+  commentReports,
   skillReports,
   soulComments,
   stars,

@@ -6,9 +6,15 @@ import type { GlobalOpts } from '../types'
 
 const mockApiRequest = vi.fn()
 const mockFetchText = vi.fn()
+const mockRegistryUrl = vi.fn((path: string, registry: string) => {
+  const base = registry.endsWith('/') ? registry : `${registry}/`
+  const relative = path.startsWith('/') ? path.slice(1) : path
+  return new URL(relative, base)
+})
 vi.mock('../../http.js', () => ({
   apiRequest: (...args: unknown[]) => mockApiRequest(...args),
   fetchText: (...args: unknown[]) => mockFetchText(...args),
+  registryUrl: (...args: [string, string]) => mockRegistryUrl(...args),
 }))
 
 const mockGetRegistry = vi.fn(async () => 'https://clawhub.ai')
@@ -118,6 +124,45 @@ describe('cmdInspect', () => {
     expect(url.searchParams.get('path')).toBe('SKILL.md')
     expect(url.searchParams.get('tag')).toBe('latest')
     expect(url.searchParams.get('version')).toBeNull()
+  })
+
+  it('prints security summary when version security metadata exists', async () => {
+    mockApiRequest
+      .mockResolvedValueOnce({
+        skill: {
+          slug: 'demo',
+          displayName: 'Demo',
+          summary: null,
+          tags: { latest: '2.0.0' },
+          stats: {},
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        latestVersion: { version: '2.0.0', createdAt: 3, changelog: 'init' },
+        owner: null,
+      })
+      .mockResolvedValueOnce({
+        skill: { slug: 'demo', displayName: 'Demo' },
+        version: {
+          version: '2.0.0',
+          createdAt: 3,
+          changelog: 'init',
+          files: [],
+          security: {
+            status: 'suspicious',
+            hasWarnings: true,
+            checkedAt: 1_700_000_000_000,
+            model: 'gpt-5.2',
+          },
+        },
+      })
+
+    await cmdInspect(makeOpts(), 'demo', { version: '2.0.0' })
+
+    expect(mockLog).toHaveBeenCalledWith('Security: SUSPICIOUS')
+    expect(mockLog).toHaveBeenCalledWith('Warnings: yes')
+    expect(mockLog).toHaveBeenCalledWith('Checked: 2023-11-14T22:13:20.000Z')
+    expect(mockLog).toHaveBeenCalledWith('Model: gpt-5.2')
   })
 
   it('rejects when both version and tag are provided', async () => {
